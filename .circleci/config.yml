@@ -1,26 +1,76 @@
 version: 2.1
 
 orbs:
-  cypress: cypress-io/cypress@3
+  cypress: cypress-io/cypress@1
   kubernetes: circleci/kubernetes@1.3
 
-jobs:
-  build:
+executors:
+  latest:
+    docker:
+      - image: cypress/browsers:node12.13.0-chrome78-ff70
+  deployment:
     machine:
       image: ubuntu-2204:current
-    steps:
-      - checkout
 
-      # Instalar dependencias
+commands:
+  save-partial-coverage-report:
+    description: |
+      Saves a single possibly partial coverage report by adding it to the
+      workspace. This way different CircleCI jobs can run parts of the tests
+      and save their results to be merged later.
+    parameters:
+      coverage-filename:
+        type: string
+        default: coverage/coverage-final.json
+        description: |
+          Path to the final coverage JSON file produced by "nyc" tool.
+          Typically called "coverage/coverage-final.json"
+      label:
+        type: string
+        default: default
+        description: |
+          Human name for the coverage file. For example, when saving both Cypress
+          and Jest coverage file, use "cypress" and "jest" to have distinct filenames.
+    steps:
+      # do not crash if the coverage is not found
+      # because a particular CI job might not have any tests to run
+      # producing no coverage.
+      - run: mkdir coverage-part || true
+      - run: touch coverage-part/.placeholder || true
+      # use unique job id to avoid accidentally overwriting coverage file
+      # and in case the build is parallel, use node index too
+      - run: cp <<parameters.coverage-filename>> coverage-part/coverage-<<parameters.label>>-$CIRCLE_WORKFLOW_JOB_ID-index-$CIRCLE_NODE_INDEX.json || true
+      - run: ls -la coverage-part
+      - persist_to_workspace:
+          root: ~/
+          paths:
+            # note that the current folder is "project"
+            # so we need to save the full path correctly
+            # otherwise the files will not be restored in the expected location
+            - 'project/coverage-part/*'
+
+  merge-coverage-reports:
+    description: |
+      Merges individual code coverage files using "nyc" tool
+      https://github.com/istanbuljs/nyc.
+      All individual files should be in the folder "coverage-part"
+    steps:
+      - run: ls -la .
+      - run: ls -la coverage-part || true
+      - run: npx nyc merge coverage-part
+      - run: mkdir .nyc_output || true
+      # storing the combined report in ".nyc_output/out.json"
+      # allows other NYC commands to find it right away
+      - run: mv coverage.json .nyc_output/out.json
+      - run: ls -la .nyc_output
+
+  connect-vpn:
+    description: Conecta a la VPN de la universidad
+    steps:
       - run:
-          name: Instalar dependencias
+          name: Instalar OpenConnect
           command: |
             sudo apt update && sudo apt install -y openconnect curl ca-certificates
-            curl -fsSL https://get.docker.com | sudo sh
-            sudo curl -L "https://github.com/docker/compose/releases/download/v2.24.0/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
-            sudo chmod +x /usr/local/bin/docker-compose
-
-      # Conectar a la VPN
       - run:
           name: Conectar a la VPN
           command: |
@@ -37,16 +87,54 @@ jobs:
               exit 1
             fi
             echo "VPN conectada"
+            echo "Public IP is now ..."
+            curl -s http://checkip.amazonaws.com
 
-      # Instalar kubectl y configurar acceso al cluster
+  disconnect-vpn:
+    description: Desconecta de la VPN
+    steps:
+      - run:
+          name: Desconectar de la VPN
+          command: |
+            sudo pkill --signal SIGINT openconnect || true
+          when: always
+
+jobs:
+  merge-coverage:
+    description: Merges individual code coverage files and sends combined data to Coveralls.io
+    executor: cypress/base-10
+    steps:
+      - attach_workspace:
+          at: ~/
+      - merge-coverage-reports
+      - run:
+          name: generate coverage report
+          command: |
+            npx nyc report \
+              --reporter lcov --reporter text-summary \
+              --report-dir coverage
+      - store_artifacts:
+          path: coverage
+      # send code coverage to coveralls.io
+      # https://coveralls.io/github/cypress-io/cypress-example-realworld
+      - run:
+          command: npm run coveralls || true
+
+  deploy-to-kubernetes:
+    executor: deployment
+    steps:
+      - checkout
+      - connect-vpn
       - run:
           name: Instalar kubectl
           command: |
             curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
             chmod +x kubectl
             sudo mv kubectl /usr/local/bin/
-
-      # Configurar kubeconfig
+      - run:
+          name: Instalar Docker
+          command: |
+            curl -fsSL https://get.docker.com | sudo sh
       - run:
           name: Configurar kubeconfig
           command: |
@@ -54,8 +142,6 @@ jobs:
             echo "$KUBECONFIG_DATA" | base64 -d > $HOME/.kube/config
             chmod 600 $HOME/.kube/config
             kubectl get nodes
-
-      # Construir imágenes
       - run:
           name: Construir imágenes Docker
           command: |
@@ -66,9 +152,6 @@ jobs:
             echo $DOCKER_PASSWORD | docker login -u $DOCKER_USERNAME --password-stdin
             docker push $DOCKER_USERNAME/conduit-client:$CIRCLE_SHA1
             docker push $DOCKER_USERNAME/conduit-server:$CIRCLE_SHA1
-
-      # Desplegar en K8s
-      - kubernetes/install-kubectl
       - run:
           name: Desplegar en Kubernetes
           command: |
@@ -143,44 +226,43 @@ jobs:
             EOL
 
             kubectl apply -f kubernetes-deployment.yaml
-
-      # Desconectar VPN
-      - run:
-          name: Desconectar VPN
-          command: |
-            sudo pkill --signal SIGINT openconnect || true
-          when: always
-
-  cypress-tests:
-    docker:
-      - image: cimg/node:18.12
-    steps:
-      - checkout
-      - run:
-          name: Instalar dependencias
-          command: |
-            cd client
-            npm install
-            cd ../server
-            npm install
-      - run:
-          name: Iniciar el servidor y ejecutar pruebas de Cypress
-          command: |
-            cd server
-            npm start &
-            cd ../client
-            npm start &
-            cd ..
-            npx cypress run
+      - disconnect-vpn
 
 workflows:
   version: 2
   build-test-deploy:
     jobs:
-      - cypress-tests
-      - build:
+      - cypress/install:
+          executor: latest
+          pre-steps:
+            - run: npm config set unsafe-perm true
+
+      - cypress/run:
           requires:
-            - cypress-tests
+            - cypress/install
+          executor: latest
+          parallel: true
+          parallelism: 2
+          no-workspace: true
+          start: npm run start:coverage
+          wait-on: http://localhost:4100
+          record: true
+          post-steps:
+            - store_artifacts:
+                path: coverage
+            # if this machine had no tests to run
+            # there will be no coverage report
+            - run: npx nyc report --reporter=text || true
+            - save-partial-coverage-report:
+                label: e2e
+
+      - merge-coverage:
+          requires:
+            - cypress/run
+
+      - deploy-to-kubernetes:
+          requires:
+            - merge-coverage
           filters:
             branches:
               only: main
