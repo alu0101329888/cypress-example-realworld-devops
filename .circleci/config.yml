@@ -89,6 +89,13 @@ commands:
             echo "VPN conectada"
             echo "Public IP is now ..."
             curl -s http://checkip.amazonaws.com
+            echo "Verificando acceso al clúster de Kubernetes..."
+            echo "Rutas actuales:"
+            ip route list
+            echo "Intentando traceroute a la IP del cluster:"
+            traceroute -T -p 6443 10.6.129.134 || true
+            echo "Intentando ping a la IP del cluster:"
+            ping -c 4 10.6.129.134 || true
 
   disconnect-vpn:
     description: Desconecta de la VPN
