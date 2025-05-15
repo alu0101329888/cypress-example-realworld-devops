@@ -76,7 +76,7 @@ commands:
           background: true
           command: |
             echo "Conectando a VPN..."
-            echo "${VPN_PASSWORD}" | sudo openconnect --protocol=gp --user=${VPN_USER} --passwd-on-stdin vpn.ull.es
+            echo "${VPN_PASSWORD}" | sudo openconnect --protocol=gp --user=${VPN_USER} --passwd-on-stdin vpn.ull.es &
 
       - run:
           name: Esperar conexión VPN (tun0)
@@ -94,6 +94,7 @@ commands:
             echo "VPN conectada"
             echo "Public IP is now ..."
             curl -s http://checkip.amazonaws.com
+            sudo ip address show
 
   disconnect-vpn:
     description: Desconecta de la VPN
@@ -147,6 +148,7 @@ jobs:
             echo "$KUBECONFIG_DATA" | base64 -d > $HOME/.kube/config
             chmod 600 $HOME/.kube/config
             echo "Verificando acceso al clúster de Kubernetes..."
+            sudo ip address show
             kubectl get nodes
       - run:
           name: Construir imágenes Docker
