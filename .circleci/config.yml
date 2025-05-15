@@ -76,7 +76,7 @@ commands:
           background: true
           command: |
             echo "Conectando a VPN..."
-            echo "${VPN_PASSWORD}" | sudo openconnect --protocol=gp --user=${VPN_USER} --passwd-on-stdin vpn.ull.es &
+            echo "${VPN_PASSWORD}" | sudo openconnect --protocol=gp --user=${VPN_USER} --passwd-on-stdin vpn.ull.es
 
       - run:
           name: Esperar conexión VPN (tun0)
