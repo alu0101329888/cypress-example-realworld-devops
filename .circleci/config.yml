@@ -95,6 +95,7 @@ jobs:
             sudo apt update && sudo apt install -y openconnect curl ca-certificates
       - run:
           name: VPN Connection
+          background: true
           command: |
             echo "Conectando a VPN..."
             echo "${VPN_PASSWORD}" | sudo openconnect --protocol=gp --user=${VPN_USER} --passwd-on-stdin vpn.ull.es &
