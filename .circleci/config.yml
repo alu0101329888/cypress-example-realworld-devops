@@ -156,7 +156,7 @@ jobs:
           name: Desplegar en Kubernetes
           command: |
             # Crear archivo de configuración para el despliegue
-            cat > kubernetes-deployment.yaml << EOL
+            cat > kubernetes-deployment.yaml \<< EOL
             apiVersion: apps/v1
             kind: Deployment
             metadata:
