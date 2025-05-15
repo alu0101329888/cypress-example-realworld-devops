@@ -110,6 +110,8 @@ jobs:
               exit 1
             fi
             echo "VPN conectada"
+            echo "Public IP is now ..." 
+            curl -s http://checkip.amazonaws.com
       - run:
           name: Run commands in our infrastructure
           command: |
