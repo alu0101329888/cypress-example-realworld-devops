@@ -89,16 +89,6 @@ commands:
             echo "VPN conectada"
             echo "Public IP is now ..."
             curl -s http://checkip.amazonaws.com
-            echo "Verificando acceso al clúster de Kubernetes..."
-            echo "Rutas actuales:"
-            ip route list
-            echo "Agregando ruta explícita hacia el clúster de Kubernetes..."
-            sudo ip route add 10.6.0.0/16 dev tun0
-            echo "Intentando traceroute a la IP del cluster:"
-            sudo apt install traceroute -y
-            traceroute -T -p 6443 10.6.129.134 || true
-            echo "Intentando ping a la IP del cluster:"
-            ping -c 4 10.6.129.134 || true
 
   disconnect-vpn:
     description: Desconecta de la VPN
@@ -151,6 +141,16 @@ jobs:
             mkdir -p $HOME/.kube
             echo "$KUBECONFIG_DATA" | base64 -d > $HOME/.kube/config
             chmod 600 $HOME/.kube/config
+            echo "Verificando acceso al clúster de Kubernetes..."
+            echo "Rutas actuales:"
+            ip route list
+            echo "Agregando ruta explícita hacia el clúster de Kubernetes..."
+            sudo ip route add 10.6.0.0/16 dev tun0
+            echo "Intentando traceroute a la IP del cluster:"
+            sudo apt install traceroute -y
+            traceroute -T -p 6443 10.6.129.134 || true
+            echo "Intentando ping a la IP del cluster:"
+            ping -c 4 10.6.129.134 || true
             echo "Probando conexión a Kubernetes:"
             kubectl get nodes --request-timeout=10s -v=6 || true
             echo "Intentando conexión normal a Kubernetes:"
