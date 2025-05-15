@@ -265,4 +265,4 @@ workflows:
             - merge-coverage
           filters:
             branches:
-              only: main
+              only: master
