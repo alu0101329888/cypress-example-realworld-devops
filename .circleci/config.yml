@@ -149,6 +149,10 @@ jobs:
             echo "$KUBECONFIG_DATA" | base64 -d > $HOME/.kube/config
             chmod 600 $HOME/.kube/config
             kubectl get nodes
+            echo "Probando conexión a Kubernetes:"
+            kubectl get nodes --request-timeout=10s -v=6 || true
+            echo "Intentando conexión normal a Kubernetes:"
+            kubectl get nodes
       - run:
           name: Construir imágenes Docker
           command: |
