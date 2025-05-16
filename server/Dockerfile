@@ -2,7 +2,7 @@ FROM node:alpine
 
 WORKDIR /app
 
-RUN apk add --no-cache python3 make g++ libtool autoconf build-essential automake libtool pkg-config
+RUN apk add --no-cache python3 make g++ libtool autoconf automake libtool pkgconf
 
 COPY package*.json ./
 
