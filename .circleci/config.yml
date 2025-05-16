@@ -120,8 +120,6 @@ jobs:
           command: |
             echo "La IP pública ahora es..." 
             curl -s http://checkip.amazonaws.com
-            echo "Agregando ruta para el API server..."
-            echo "Done" 
       - run:
           name: Instalar kubectl
           command: |
@@ -139,7 +137,11 @@ jobs:
             echo "$KUBECONFIG_DATA" | base64 -d > $HOME/.kube/config
             chmod 600 $HOME/.kube/config
             echo "Realizando port forwarding al kube api server..."
-            sshpass -p $MACHINE_PASSWORD ssh -o StrictHostKeyChecking=no -L 6443:$(kubectl config view --minify -o jsonpath='{.clusters[0].cluster.server}' | sed -E 's|https://([^:]+):[0-9]+|\1|'):6443 ansible@$(kubectl config view --minify -o jsonpath='{.clusters[0].cluster.server}' | sed -E 's|https://([^:]+):[0-9]+|\1|') -N -f
+            sshpass -p $MACHINE_PASSWORD ssh -o StrictHostKeyChecking=no -L 6443:localhost:6443 ansible@$(kubectl config view --minify -o jsonpath='{.clusters[0].cluster.server}' | sed -E 's|https://([^:]+):[0-9]+|\1|') -N -f
+            echo "Modificando kubeconfig..."
+            cp ~/.kube/config ~/.kube/config.original
+            kubectl config set-cluster $(kubectl config view --minify -o jsonpath='{.clusters[0].name}') --server=https://localhost:6443
+            kubectl config set-cluster $(kubectl config view --minify -o jsonpath='{.clusters[0].name}') --insecure-skip-tls-verify=true
             echo "Verificando acceso al clúster de Kubernetes..."
             kubectl get nodes
       - run:
