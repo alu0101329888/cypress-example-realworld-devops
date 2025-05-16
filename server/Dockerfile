@@ -7,7 +7,6 @@ RUN apk add --no-cache python3 make g++ libtool autoconf automake libtool pkgcon
 COPY package*.json ./
 
 RUN npm ci
-RUN npm run build
 
 COPY . .
 
