@@ -89,7 +89,7 @@ jobs:
     executor: deployment
     steps:
       - checkout
-      - run: 
+      - run:
           name: Update and install
           command: |
             sudo apt update && sudo apt install -y openconnect curl ca-certificates sshpass
@@ -123,12 +123,12 @@ jobs:
               exit 1
             fi
             echo "VPN conectada"
-            echo "La IP pública ahora es..." 
+            echo "La IP pública ahora es..."
             curl -s http://checkip.amazonaws.com
       - run:
           name: Run commands in our infrastructure
           command: |
-            echo "La IP pública ahora es..." 
+            echo "La IP pública ahora es..."
             curl -s http://checkip.amazonaws.com
       - run:
           name: Instalar kubectl
@@ -224,7 +224,7 @@ jobs:
               ports:
               - port: 80
                 targetPort: 4100
-              type: LoadBalancer
+              type: NodePort
             EOL
 
             kubectl apply -f kubernetes-deployment.yaml
