@@ -36,15 +36,15 @@ jobs:
             echo "Done"
             # Another command
       - run:
-        name: Disconnect from VPN
-        command: |
-          if [ -f vpn.pid ]; then
-            sudo kill -2 $(cat vpn.pid) || true
-            rm vpn.pid
-          else
-            echo "No se encontró vpn.pid"
-          fi
-        when: always
+          name: Disconnect from VPN
+          command: |
+            if [ -f vpn.pid ]; then
+              sudo kill -2 $(cat vpn.pid) || true
+              rm vpn.pid
+            else
+              echo "No se encontró vpn.pid"
+            fi
+          when: always
 
 
 
