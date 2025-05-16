@@ -1,4 +1,5 @@
 version: 2.1
+
 jobs:
   build:
     machine:
@@ -10,47 +11,46 @@ jobs:
           command: |
             sudo apt update && sudo apt install -y openconnect curl ca-certificates
       - run:
-          name: VPN Connection
+          name: Start VPN Connection as a Background Service
+          background: true
           command: |
-            echo "Conectando a VPN..."
-            (
-              printf '%s\n' "${VPN_PASSWORD}" | sudo openconnect --protocol=gp --user="${VPN_USER}" --passwd-on-stdin vpn.ull.es
-            ) > vpn.log 2>&1 &
-            echo $! > vpn.pid
-
+            echo "Iniciando servicio VPN en segundo plano..."
+            # Guardar PID para poder terminarlo después
+            echo "${VPN_PASSWORD}" | sudo openconnect --protocol=gp --user=${VPN_USER} --passwd-on-stdin vpn.ull.es
+            # Este comando se mantiene ejecutando en segundo plano debido a 'background: true'
+      - run:
+          name: Wait for VPN to connect
+          command: |
+            echo "Esperando a que la conexión VPN se establezca..."
             timeout=0
             while ! ip a show tun0 &>/dev/null && [ $timeout -lt 60 ]; do
-              echo "Esperando conexión VPN..."
-              sleep 1
-              timeout=$((timeout+1))
+               echo "Esperando conexión VPN..."
+               sleep 1
+               timeout=$((timeout+1))
             done
-
             if [ $timeout -ge 60 ]; then
               echo "No se pudo conectar a la VPN en 60 segundos."
-              cat vpn.log
               exit 1
             fi
-
             echo "VPN conectada"
+            echo "La IP pública ahora es:"
             curl -s http://checkip.amazonaws.com
-
       - run:
-          name: Run commands in our infrastructure
+          name: Run first command with VPN
           command: |
-            echo "Public IP is now ..."
+            echo "Verificando IP pública con VPN activa:"
             curl -s http://checkip.amazonaws.com
-            echo "Done"
-            # Another command
+            echo "Este comando ya se ejecuta con la VPN activa"
+      - run:
+          name: Run another command with VPN
+          command: |
+            echo "Segunda tarea con VPN activa"
+            curl -s http://checkip.amazonaws.com
+            # Más comandos aquí
       - run:
           name: Disconnect from VPN
           command: |
-            if [ -f vpn.pid ]; then
-              sudo kill -2 $(cat vpn.pid) || true
-              rm vpn.pid
-            else
-              echo "No se encontró vpn.pid"
-            fi
+            echo "Desconectando VPN..."
+            sudo pkill --signal SIGINT openconnect || true
+            echo "VPN desconectada"
           when: always
-
-
-
