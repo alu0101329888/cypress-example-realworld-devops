@@ -139,10 +139,7 @@ jobs:
             echo "$KUBECONFIG_DATA" | base64 -d > $HOME/.kube/config
             chmod 600 $HOME/.kube/config
             echo "Realizando port forwarding al kube api server..."
-            sshpass -p $MACHINE_PASSWORD ssh -o StrictHostKeyChecking=no -L 6443:localhost:6443 ansible@$(kubectl config view --minify -o jsonpath='{.clusters[0].cluster.server}' | sed -E 's|https://([^:]+):[0-9]+|\1|') -N -f
-            sudo cp ~/.kube/config ~/.kube/config.original
-            echo "Cambiando la IP del server en el archivo config a localhost..."
-            kubectl config set-cluster $(kubectl config view --minify -o jsonpath='{.clusters[0].name}') --server=https://localhost:6443
+            sshpass -p $MACHINE_PASSWORD ssh -o StrictHostKeyChecking=no -L 6443:$(kubectl config view --minify -o jsonpath='{.clusters[0].cluster.server}' | sed -E 's|https://([^:]+):[0-9]+|\1|'):6443 ansible@$(kubectl config view --minify -o jsonpath='{.clusters[0].cluster.server}' | sed -E 's|https://([^:]+):[0-9]+|\1|') -N -f
             echo "Verificando acceso al clúster de Kubernetes..."
             kubectl get nodes
       - run:
