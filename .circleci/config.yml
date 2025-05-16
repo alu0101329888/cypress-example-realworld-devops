@@ -120,10 +120,8 @@ jobs:
           command: |
             echo "La IP pública ahora es..." 
             curl -s http://checkip.amazonaws.com
-            echo "ping -c 4 10.6.129.134 || echo No se pudo hacer ping al API server"
-            ping -c 4 10.6.129.134 || echo "No se pudo hacer ping al API server"
-            echo "ip route get 10.6.129.134"
-            ip route get 10.6.129.134
+            echo "Agregando ruta para el API server..."
+            sudo ip route add 10.6.129.0/24 dev tun0
             echo "Done" 
       - run:
           name: Instalar kubectl
