@@ -89,7 +89,7 @@ jobs:
     executor: deployment
     steps:
       - checkout
-      - run:
+      - run: 
           name: Update and install
           command: |
             sudo apt update && sudo apt install -y openconnect curl ca-certificates sshpass
@@ -113,13 +113,15 @@ jobs:
               exit 1
             fi
             echo "VPN conectada"
-            echo "La IP pública ahora es..."
+            echo "La IP pública ahora es..." 
             curl -s http://checkip.amazonaws.com
       - run:
           name: Run commands in our infrastructure
           command: |
-            echo "La IP pública ahora es..."
+            echo "La IP pública ahora es..." 
             curl -s http://checkip.amazonaws.com
+            echo "Agregando ruta para el API server..."
+            echo "Done" 
       - run:
           name: Instalar kubectl
           command: |
@@ -138,6 +140,9 @@ jobs:
             chmod 600 $HOME/.kube/config
             echo "Realizando port forwarding al kube api server..."
             sshpass -p $MACHINE_PASSWORD ssh -o StrictHostKeyChecking=no -L 6443:localhost:6443 ansible@$(kubectl config view --minify -o jsonpath='{.clusters[0].cluster.server}' | sed -E 's|https://([^:]+):[0-9]+|\1|') -N -f
+            sudo cp ~/.kube/config ~/.kube/config.original
+            echo "Cambiando la IP del server en el archivo config a localhost..."
+            kubectl config set-cluster $(kubectl config view --minify -o jsonpath='{.clusters[0].name}') --server=https://localhost:6443
             echo "Verificando acceso al clúster de Kubernetes..."
             kubectl get nodes
       - run:
