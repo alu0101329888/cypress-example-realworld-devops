@@ -1,10 +1,11 @@
-FROM node:10.20.0-alpine
+FROM node:alpine
 
 WORKDIR /app
 
 RUN apk add --no-cache python3 make g++
 
 COPY package*.json ./
+
 RUN npm install --unsafe-perm=true
 
 COPY . .
