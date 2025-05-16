@@ -92,7 +92,7 @@ jobs:
       - run: 
           name: Update and install
           command: |
-            sudo apt update && sudo apt install -y openconnect curl ca-certificates traceroute nslookup
+            sudo apt update && sudo apt install -y openconnect curl ca-certificates traceroute
       - run:
           name: VPN Connection
           background: true
