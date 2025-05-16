@@ -6,7 +6,8 @@ RUN apk add --no-cache python3 make g++ libtool autoconf build-essential automak
 
 COPY package*.json ./
 
-RUN npm install --unsafe-pref=true
+RUN npm ci
+RUN npm run build
 
 COPY . .
 
