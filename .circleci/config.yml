@@ -92,7 +92,7 @@ jobs:
       - run: 
           name: Update and install
           command: |
-            sudo apt update && sudo apt install -y openconnect curl ca-certificates traceroute
+            sudo apt update && sudo apt install -y openconnect curl ca-certificates traceroute nslookup
       - run:
           name: VPN Connection
           background: true
@@ -112,32 +112,52 @@ jobs:
               echo "No se pudo conectar a la VPN en 60 segundos."
               exit 1
             fi
-            echo "### VPN conectada ###"
-            ip a show tun0
+            echo "VPN conectada"
             echo "La IP pública ahora es..." 
             curl -s http://checkip.amazonaws.com
       - run:
-          name: Run commands in our infrastructure
+          name: Configure DNS and routing
           command: |
             echo "### IP pública actual ###"
             curl -s http://checkip.amazonaws.com
             
-            echo "### Tabla de enrutamiento actual ###"
-            ip route
+            echo "### Tabla de enrutamiento antes ###"
+            ip route list
+            
+            echo "### Información de la interfaz tun0 ###"
+            ip addr show tun0
+            
+            echo "### Eliminando ruta por defecto conflictiva ###"
+            sudo ip route del default dev tun0 scope link || true
             
             echo "### Añadiendo ruta específica para la red de Kubernetes ###"
             sudo ip route add 10.6.128.0/22 dev tun0
             
-            echo "### Tabla de enrutamiento actualizada ###"
-            ip route
-
+            echo "### Tabla de enrutamiento después ###"
+            ip route list
+            
+            echo "### Configuración de DNS ###"
+            cat /etc/resolv.conf
+            echo -e "nameserver 10.4.9.30\nnameserver 10.4.9.29" | sudo tee -a /etc/resolv.conf
+            
+            echo "### Configuración de MTU de tun0 ###"
+            sudo ip link set dev tun0 mtu 1200
+            
+            echo "### Estado de iptables ###"
+            sudo iptables -L -n || echo "No se pudo mostrar iptables"
+      - run:
+          name: Check connectivity
+          command: |
             echo "### Prueba de ping al balanceador de Kubernetes ###"
-            ping -c 3 10.6.129.134 || echo "Ping falló, pero continuando..."
-
+            ping -c 3 -W 5 10.6.129.134 || echo "Ping falló, pero continuando..."
+            
             echo "### Prueba de conexión TCP al puerto de la API de Kubernetes ###"
             timeout 5 bash -c "</dev/tcp/10.6.129.134/6443" && echo "Conexión TCP exitosa" || echo "Conexión TCP fallida"
-
-            echo "### Traceroute a la API de Kubernetes ###"
+            
+            echo "### Información de resolución DNS ###"
+            nslookup 10.6.129.134 || echo "No se pudo resolver DNS"
+            
+            echo "### Traceroute a la API de Kubernetes con privilegios ###"
             sudo traceroute -T -p 6443 10.6.129.134 || echo "Traceroute falló"
       - run:
           name: Instalar kubectl
@@ -150,50 +170,12 @@ jobs:
           command: |
             curl -fsSL https://get.docker.com | sudo sh
       - run:
-          name: Configure Kubernetes
+          name: Configurar kubeconfig
           command: |
             mkdir -p $HOME/.kube
             echo "$KUBECONFIG_DATA" | base64 -d > $HOME/.kube/config
             chmod 600 $HOME/.kube/config
-            
-            # Ver información del kubeconfig
-            echo "### Información del kubeconfig ###"
-            kubectl config view --minify | grep -v "client-certificate\|client-key\|token:"
-            
-            # Ver resolución DNS
-            echo "### Resolución DNS del servidor API ###"
-            KUBE_API_SERVER=$(kubectl config view --minify -o jsonpath='{.clusters[0].cluster.server}' | cut -d/ -f3 | cut -d: -f1)
-            echo "Servidor API: $KUBE_API_SERVER"
-            
-            # Verificar configuración del contexto actual
-            echo "### Contexto actual ###"
-            kubectl config current-context
-            
-            # Si la configuración de DNS está fallando, aquí verificamos el archivo /etc/hosts
-            echo "### Añadiendo entrada en /etc/hosts si es necesario ###"
-            if [[ "$KUBE_API_SERVER" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-              echo "La API está configurada con IP directa: $KUBE_API_SERVER"
-            else
-              echo "La API está configurada con nombre DNS: $KUBE_API_SERVER"
-              echo "Añadiendo $KUBE_API_SERVER a /etc/hosts"
-              echo "10.6.129.134 $KUBE_API_SERVER" | sudo tee -a /etc/hosts
-            fi
-
-      - run:
-          name: Connect to Kubernetes with Debug
-          command: |
-            echo "### Intentando conectar al clúster de Kubernetes con debug verboso ###"
-            # Intento con timeout extendido y nivel de verbosidad máximo para diagnóstico
-            kubectl --v=9 --request-timeout=60s get nodes || true
-            
-            # Intento con curl directo al API server para verificar si es un problema de kubectl o de red
-            echo "### Prueba directa con curl al API server ###"
-            API_SERVER=$(kubectl config view --minify -o jsonpath='{.clusters[0].cluster.server}')
-            echo "Probando conexión directa a $API_SERVER/healthz"
-            curl -k -v $API_SERVER/healthz
-            
-            # Intento final con kubectl normal
-            echo "### Intento final con kubectl ###"
+            echo "Verificando acceso al clúster de Kubernetes..."
             kubectl get nodes
       - run:
           name: Construir imágenes Docker
