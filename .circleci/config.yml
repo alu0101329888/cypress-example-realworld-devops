@@ -94,6 +94,16 @@ jobs:
           command: |
             sudo apt update && sudo apt install -y openconnect curl ca-certificates sshpass
       - run:
+          name: Construir imágenes Docker
+          command: |
+            cd client
+            docker build -t $DOCKER_USERNAME/conduit-client:$CIRCLE_SHA1 .
+            cd ../server
+            docker build -t $DOCKER_USERNAME/conduit-server:$CIRCLE_SHA1 .
+            echo $DOCKER_PASSWORD | docker login -u $DOCKER_USERNAME --password-stdin
+            docker push $DOCKER_USERNAME/conduit-client:$CIRCLE_SHA1
+            docker push $DOCKER_USERNAME/conduit-server:$CIRCLE_SHA1
+      - run:
           name: VPN Connection
           background: true
           command: |
@@ -144,16 +154,6 @@ jobs:
             kubectl config set-cluster $(kubectl config view --minify -o jsonpath='{.clusters[0].name}') --insecure-skip-tls-verify=true
             echo "Verificando acceso al clúster de Kubernetes..."
             kubectl get nodes
-      - run:
-          name: Construir imágenes Docker
-          command: |
-            cd client
-            docker build -t $DOCKER_USERNAME/conduit-client:$CIRCLE_SHA1 .
-            cd ../server
-            docker build -t $DOCKER_USERNAME/conduit-server:$CIRCLE_SHA1 .
-            echo $DOCKER_PASSWORD | docker login -u $DOCKER_USERNAME --password-stdin
-            docker push $DOCKER_USERNAME/conduit-client:$CIRCLE_SHA1
-            docker push $DOCKER_USERNAME/conduit-server:$CIRCLE_SHA1
       - run:
           name: Desplegar en Kubernetes
           command: |
