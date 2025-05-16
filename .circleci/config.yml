@@ -92,7 +92,7 @@ jobs:
       - run: 
           name: Update and install
           command: |
-            sudo apt update && sudo apt install -y openconnect curl ca-certificates traceroute
+            sudo apt update && sudo apt install -y openconnect curl ca-certificates
       - run:
           name: VPN Connection
           background: true
@@ -116,49 +116,15 @@ jobs:
             echo "La IP pública ahora es..." 
             curl -s http://checkip.amazonaws.com
       - run:
-          name: Configure DNS and routing
+          name: Run commands in our infrastructure
           command: |
-            echo "### IP pública actual ###"
+            echo "La IP pública ahora es..." 
             curl -s http://checkip.amazonaws.com
-            
-            echo "### Tabla de enrutamiento antes ###"
-            ip route list
-            
-            echo "### Información de la interfaz tun0 ###"
-            ip addr show tun0
-            
-            echo "### Eliminando ruta por defecto conflictiva ###"
-            sudo ip route del default dev tun0 scope link || true
-            
-            echo "### Añadiendo ruta específica para la red de Kubernetes ###"
-            sudo ip route add 10.6.128.0/22 dev tun0
-            
-            echo "### Tabla de enrutamiento después ###"
-            ip route list
-            
-            echo "### Configuración de DNS ###"
-            cat /etc/resolv.conf
-            echo -e "nameserver 10.4.9.30\nnameserver 10.4.9.29" | sudo tee -a /etc/resolv.conf
-            
-            echo "### Configuración de MTU de tun0 ###"
-            sudo ip link set dev tun0 mtu 1200
-            
-            echo "### Estado de iptables ###"
-            sudo iptables -L -n || echo "No se pudo mostrar iptables"
-      - run:
-          name: Check connectivity
-          command: |
-            echo "### Prueba de ping al balanceador de Kubernetes ###"
-            ping -c 3 -W 5 10.6.129.134 || echo "Ping falló, pero continuando..."
-            
-            echo "### Prueba de conexión TCP al puerto de la API de Kubernetes ###"
-            timeout 5 bash -c "</dev/tcp/10.6.129.134/6443" && echo "Conexión TCP exitosa" || echo "Conexión TCP fallida"
-            
-            echo "### Información de resolución DNS ###"
-            nslookup 10.6.129.134 || echo "No se pudo resolver DNS"
-            
-            echo "### Traceroute a la API de Kubernetes con privilegios ###"
-            sudo traceroute -T -p 6443 10.6.129.134 || echo "Traceroute falló"
+            echo "ping -c 4 10.6.129.134 || echo "No se pudo hacer ping al API server"
+            ping -c 4 10.6.129.134 || echo "No se pudo hacer ping al API server"
+            echo "ip route get 10.6.129.134"
+            ip route get 10.6.129.134
+            echo "Done" 
       - run:
           name: Instalar kubectl
           command: |
