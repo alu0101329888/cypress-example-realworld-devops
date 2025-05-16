@@ -5,8 +5,7 @@ WORKDIR /app
 RUN apk add --no-cache python3 make g++
 
 COPY package*.json ./
-RUN npm config set unsafe-perm true
-RUN npm install
+RUN npm install --unsafe-perm=true
 
 COPY . .
 
