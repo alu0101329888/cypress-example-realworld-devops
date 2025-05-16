@@ -1,27 +1,107 @@
 version: 2.1
 
-jobs:
-  build:
+orbs:
+  cypress: cypress-io/cypress@1
+  kubernetes: circleci/kubernetes@1.3
+
+executors:
+  latest:
+    docker:
+      - image: cypress/browsers:node12.13.0-chrome78-ff70
+  deployment:
     machine:
       image: ubuntu-2204:current
+
+commands:
+  save-partial-coverage-report:
+    description: |
+      Saves a single possibly partial coverage report by adding it to the
+      workspace. This way different CircleCI jobs can run parts of the tests
+      and save their results to be merged later.
+    parameters:
+      coverage-filename:
+        type: string
+        default: coverage/coverage-final.json
+        description: |
+          Path to the final coverage JSON file produced by "nyc" tool.
+          Typically called "coverage/coverage-final.json"
+      label:
+        type: string
+        default: default
+        description: |
+          Human name for the coverage file. For example, when saving both Cypress
+          and Jest coverage file, use "cypress" and "jest" to have distinct filenames.
+    steps:
+      # do not crash if the coverage is not found
+      # because a particular CI job might not have any tests to run
+      # producing no coverage.
+      - run: mkdir coverage-part || true
+      - run: touch coverage-part/.placeholder || true
+      # use unique job id to avoid accidentally overwriting coverage file
+      # and in case the build is parallel, use node index too
+      - run: cp <<parameters.coverage-filename>> coverage-part/coverage-<<parameters.label>>-$CIRCLE_WORKFLOW_JOB_ID-index-$CIRCLE_NODE_INDEX.json || true
+      - run: ls -la coverage-part
+      - persist_to_workspace:
+          root: ~/
+          paths:
+            # note that the current folder is "project"
+            # so we need to save the full path correctly
+            # otherwise the files will not be restored in the expected location
+            - 'project/coverage-part/*'
+
+  merge-coverage-reports:
+    description: |
+      Merges individual code coverage files using "nyc" tool
+      https://github.com/istanbuljs/nyc.
+      All individual files should be in the folder "coverage-part"
+    steps:
+      - run: ls -la .
+      - run: ls -la coverage-part || true
+      - run: npx nyc merge coverage-part
+      - run: mkdir .nyc_output || true
+      # storing the combined report in ".nyc_output/out.json"
+      # allows other NYC commands to find it right away
+      - run: mv coverage.json .nyc_output/out.json
+      - run: ls -la .nyc_output
+
+jobs:
+  merge-coverage:
+    description: Merges individual code coverage files and sends combined data to Coveralls.io
+    executor: cypress/base-10
+    steps:
+      - attach_workspace:
+          at: ~/
+      - merge-coverage-reports
+      - run:
+          name: generate coverage report
+          command: |
+            npx nyc report \
+              --reporter lcov --reporter text-summary \
+              --report-dir coverage
+      - store_artifacts:
+          path: coverage
+      # send code coverage to coveralls.io
+      # https://coveralls.io/github/cypress-io/cypress-example-realworld
+      - run:
+          command: npm run coveralls || true
+
+  deploy-to-kubernetes:
+    executor: deployment
     steps:
       - checkout
       - run:
           name: Update and install
           command: |
-            sudo apt update && sudo apt install -y openconnect curl ca-certificates iputils-ping traceroute net-tools dnsutils
-
+            sudo apt update && sudo apt install -y openconnect curl ca-certificates traceroute
       - run:
-          name: Start VPN Connection as a Background Service
+          name: VPN Connection
           background: true
           command: |
             echo "Iniciando servicio VPN en segundo plano..."
             echo "${VPN_PASSWORD}" | sudo openconnect --protocol=gp --user=${VPN_USER} --passwd-on-stdin vpn.ull.es
-
       - run:
-          name: Wait for VPN and configure routing
+          name: Wait for VPN to connect
           command: |
-            echo "Esperando a que la conexión VPN se establezca..."
             timeout=0
             while ! ip a show tun0 &>/dev/null && [ $timeout -lt 60 ]; do
                echo "Esperando conexión VPN..."
@@ -32,89 +112,178 @@ jobs:
               echo "No se pudo conectar a la VPN en 60 segundos."
               exit 1
             fi
-
-            # Información de la VPN conectada
             echo "### VPN conectada ###"
             ip a show tun0
-
-            # Obtener IP pública
+            echo "La IP pública ahora es..."
+            curl -s http://checkip.amazonaws.com
+      - run:
+          name: Run commands in our infrastructure
+          command: |
             echo "### IP pública actual ###"
             curl -s http://checkip.amazonaws.com
 
-            # Información de enrutamiento antes de cambios
             echo "### Tabla de enrutamiento actual ###"
             ip route
 
-            # Solución 1: Añadir ruta específica para la red de Kubernetes
             echo "### Añadiendo ruta específica para la red de Kubernetes ###"
-            # Esta subred específica cubre todo el rango de tu clúster (10.6.128.0/22)
             sudo ip route add 10.6.128.0/22 dev tun0
 
-            # Ver cambios de rutas
             echo "### Tabla de enrutamiento actualizada ###"
             ip route
 
-            # Test de conectividad básica
             echo "### Prueba de ping al balanceador de Kubernetes ###"
             ping -c 3 10.6.129.134 || echo "Ping falló, pero continuando..."
 
-            # Test de conectividad TCP al puerto de la API de Kubernetes
             echo "### Prueba de conexión TCP al puerto de la API de Kubernetes ###"
             timeout 5 bash -c "</dev/tcp/10.6.129.134/6443" && echo "Conexión TCP exitosa" || echo "Conexión TCP fallida"
 
-            # Traceroute para diagnóstico
             echo "### Traceroute a la API de Kubernetes ###"
             traceroute -T -p 6443 10.6.129.134 || echo "Traceroute falló"
-
       - run:
-          name: Configure Kubernetes
+          name: Instalar kubectl
+          command: |
+            curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
+            chmod +x kubectl
+            sudo mv kubectl /usr/local/bin/
+      - run:
+          name: Instalar Docker
+          command: |
+            curl -fsSL https://get.docker.com | sudo sh
+      - run:
+          name: Configurar kubeconfig
           command: |
             mkdir -p $HOME/.kube
             echo "$KUBECONFIG_DATA" | base64 -d > $HOME/.kube/config
             chmod 600 $HOME/.kube/config
-
-            # Ver información del kubeconfig
-            echo "### Información del kubeconfig ###"
-            kubectl config view --minify | grep -v "client-certificate\|client-key\|token:"
-
-            # Ver resolución DNS
-            echo "### Resolución DNS del servidor API ###"
-            KUBE_API_SERVER=$(kubectl config view --minify -o jsonpath='{.clusters[0].cluster.server}' | cut -d/ -f3 | cut -d: -f1)
-            echo "Servidor API: $KUBE_API_SERVER"
-
-            # Verificar configuración del contexto actual
-            echo "### Contexto actual ###"
-            kubectl config current-context
-
-            # Si la configuración de DNS está fallando, aquí verificamos el archivo /etc/hosts
-            echo "### Añadiendo entrada en /etc/hosts si es necesario ###"
-            if [[ "$KUBE_API_SERVER" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-              echo "La API está configurada con IP directa: $KUBE_API_SERVER"
-            else
-              echo "La API está configurada con nombre DNS: $KUBE_API_SERVER"
-              echo "Añadiendo $KUBE_API_SERVER a /etc/hosts"
-              echo "10.6.129.134 $KUBE_API_SERVER" | sudo tee -a /etc/hosts
-            fi
-
-      - run:
-          name: Connect to Kubernetes with Debug
-          command: |
-            echo "### Intentando conectar al clúster de Kubernetes con debug verboso ###"
-            # Intento con timeout extendido y nivel de verbosidad máximo para diagnóstico
-            kubectl --v=9 --request-timeout=60s get nodes || true
-            # Intento con curl directo al API server para verificar si es un problema de kubectl o de red
-            echo "### Prueba directa con curl al API server ###"
-            API_SERVER=$(kubectl config view --minify -o jsonpath='{.clusters[0].cluster.server}')
-            echo "Probando conexión directa a $API_SERVER/healthz"
-            curl -k -v $API_SERVER/healthz
-            # Intento final con kubectl normal
-            echo "### Intento final con kubectl ###"
+            echo "Verificando acceso al clúster de Kubernetes..."
+            sudo ip address show
             kubectl get nodes
+      - run:
+          name: Construir imágenes Docker
+          command: |
+            cd client
+            docker build -t $DOCKER_USERNAME/conduit-client:$CIRCLE_SHA1 .
+            cd ../server
+            docker build -t $DOCKER_USERNAME/conduit-server:$CIRCLE_SHA1 .
+            echo $DOCKER_PASSWORD | docker login -u $DOCKER_USERNAME --password-stdin
+            docker push $DOCKER_USERNAME/conduit-client:$CIRCLE_SHA1
+            docker push $DOCKER_USERNAME/conduit-server:$CIRCLE_SHA1
+      - run:
+          name: Desplegar en Kubernetes
+          command: |
+            # Crear archivo de configuración para el despliegue
+            cat > kubernetes-deployment.yaml \<< EOL
+            apiVersion: apps/v1
+            kind: Deployment
+            metadata:
+              name: conduit-server
+            spec:
+              replicas: 2
+              selector:
+                matchLabels:
+                  app: conduit-server
+              template:
+                metadata:
+                  labels:
+                    app: conduit-server
+                spec:
+                  containers:
+                  - name: server
+                    image: $DOCKER_USERNAME/conduit-server:$CIRCLE_SHA1
+                    ports:
+                    - containerPort: 3000
+            ---
+            apiVersion: v1
+            kind: Service
+            metadata:
+              name: conduit-server
+            spec:
+              selector:
+                app: conduit-server
+              ports:
+              - port: 3000
+                targetPort: 3000
+              type: ClusterIP
+            ---
+            apiVersion: apps/v1
+            kind: Deployment
+            metadata:
+              name: conduit-client
+            spec:
+              replicas: 2
+              selector:
+                matchLabels:
+                  app: conduit-client
+              template:
+                metadata:
+                  labels:
+                    app: conduit-client
+                spec:
+                  containers:
+                  - name: client
+                    image: $DOCKER_USERNAME/conduit-client:$CIRCLE_SHA1
+                    ports:
+                    - containerPort: 4100
+                    env:
+                    - name: API_URL
+                      value: http://conduit-server:3000/api
+            ---
+            apiVersion: v1
+            kind: Service
+            metadata:
+              name: conduit-client
+            spec:
+              selector:
+                app: conduit-client
+              ports:
+              - port: 80
+                targetPort: 4100
+              type: LoadBalancer
+            EOL
 
+            kubectl apply -f kubernetes-deployment.yaml
       - run:
           name: Disconnect from VPN
           command: |
-            echo "Desconectando VPN..."
             sudo pkill --signal SIGINT openconnect || true
-            echo "VPN desconectada"
           when: always
+
+workflows:
+  version: 2
+  build-test-deploy:
+    jobs:
+      - cypress/install:
+          executor: latest
+          pre-steps:
+            - run: npm config set unsafe-perm true
+
+      - cypress/run:
+          requires:
+            - cypress/install
+          executor: latest
+          parallel: true
+          parallelism: 2
+          no-workspace: true
+          start: npm run start:coverage
+          wait-on: http://localhost:4100
+          record: true
+          post-steps:
+            - store_artifacts:
+                path: coverage
+            # if this machine had no tests to run
+            # there will be no coverage report
+            - run: npx nyc report --reporter=text || true
+            - save-partial-coverage-report:
+                label: e2e
+
+      - merge-coverage:
+          requires:
+            - cypress/run
+
+      - deploy-to-kubernetes:
+          requires:
+            - merge-coverage
+          filters:
+            branches:
+              only: master
+
