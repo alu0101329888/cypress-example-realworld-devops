@@ -17,7 +17,7 @@ RUN cd package
 RUN autoreconf -ivf || true
 RUN npm install --build-from-source
 RUN cd /app
-NPM npm install
+RUN npm install
 
 COPY . .
 
