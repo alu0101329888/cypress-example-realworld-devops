@@ -121,7 +121,6 @@ jobs:
             echo "La IP pública ahora es..." 
             curl -s http://checkip.amazonaws.com
             echo "Agregando ruta para el API server..."
-            sudo ip route add 10.6.129.0/24 dev tun0
             echo "Done" 
       - run:
           name: Instalar kubectl
