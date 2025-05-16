@@ -13,21 +13,27 @@ jobs:
           name: VPN Connection
           command: |
             echo "Conectando a VPN..."
-            nohup sudo openconnect --protocol=gp --user=${VPN_USER} --passwd-on-stdin vpn.ull.es > vpn.log 2>&1 < /dev/null &
+            (
+              printf '%s\n' "${VPN_PASSWORD}" | sudo openconnect --protocol=gp --user="${VPN_USER}" --passwd-on-stdin vpn.ull.es
+            ) > vpn.log 2>&1 &
             echo $! > vpn.pid
+
             timeout=0
             while ! ip a show tun0 &>/dev/null && [ $timeout -lt 60 ]; do
               echo "Esperando conexión VPN..."
               sleep 1
               timeout=$((timeout+1))
             done
+
             if [ $timeout -ge 60 ]; then
               echo "No se pudo conectar a la VPN en 60 segundos."
               cat vpn.log
               exit 1
             fi
+
             echo "VPN conectada"
             curl -s http://checkip.amazonaws.com
+
       - run:
           name: Run commands in our infrastructure
           command: |
