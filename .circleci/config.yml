@@ -1,9 +1,92 @@
 version: 2.1
 
-jobs:
-  build:
+orbs:
+  cypress: cypress-io/cypress@1
+  kubernetes: circleci/kubernetes@1.3
+
+executors:
+  latest:
+    docker:
+      - image: cypress/browsers:node12.13.0-chrome78-ff70
+  deployment:
     machine:
       image: ubuntu-2204:current
+
+commands:
+  save-partial-coverage-report:
+    description: |
+      Saves a single possibly partial coverage report by adding it to the
+      workspace. This way different CircleCI jobs can run parts of the tests
+      and save their results to be merged later.
+    parameters:
+      coverage-filename:
+        type: string
+        default: coverage/coverage-final.json
+        description: |
+          Path to the final coverage JSON file produced by "nyc" tool.
+          Typically called "coverage/coverage-final.json"
+      label:
+        type: string
+        default: default
+        description: |
+          Human name for the coverage file. For example, when saving both Cypress
+          and Jest coverage file, use "cypress" and "jest" to have distinct filenames.
+    steps:
+      # do not crash if the coverage is not found
+      # because a particular CI job might not have any tests to run
+      # producing no coverage.
+      - run: mkdir coverage-part || true
+      - run: touch coverage-part/.placeholder || true
+      # use unique job id to avoid accidentally overwriting coverage file
+      # and in case the build is parallel, use node index too
+      - run: cp <<parameters.coverage-filename>> coverage-part/coverage-<<parameters.label>>-$CIRCLE_WORKFLOW_JOB_ID-index-$CIRCLE_NODE_INDEX.json || true
+      - run: ls -la coverage-part
+      - persist_to_workspace:
+          root: ~/
+          paths:
+            # note that the current folder is "project"
+            # so we need to save the full path correctly
+            # otherwise the files will not be restored in the expected location
+            - 'project/coverage-part/*'
+
+  merge-coverage-reports:
+    description: |
+      Merges individual code coverage files using "nyc" tool
+      https://github.com/istanbuljs/nyc.
+      All individual files should be in the folder "coverage-part"
+    steps:
+      - run: ls -la .
+      - run: ls -la coverage-part || true
+      - run: npx nyc merge coverage-part
+      - run: mkdir .nyc_output || true
+      # storing the combined report in ".nyc_output/out.json"
+      # allows other NYC commands to find it right away
+      - run: mv coverage.json .nyc_output/out.json
+      - run: ls -la .nyc_output
+
+jobs:
+  merge-coverage:
+    description: Merges individual code coverage files and sends combined data to Coveralls.io
+    executor: cypress/base-10
+    steps:
+      - attach_workspace:
+          at: ~/
+      - merge-coverage-reports
+      - run:
+          name: generate coverage report
+          command: |
+            npx nyc report \
+              --reporter lcov --reporter text-summary \
+              --report-dir coverage
+      - store_artifacts:
+          path: coverage
+      # send code coverage to coveralls.io
+      # https://coveralls.io/github/cypress-io/cypress-example-realworld
+      - run:
+          command: npm run coveralls || true
+
+  deploy-to-kubernetes:
+    executor: deployment
     steps:
       - checkout
       - run:
@@ -11,17 +94,14 @@ jobs:
           command: |
             sudo apt update && sudo apt install -y openconnect curl ca-certificates
       - run:
-          name: Start VPN Connection as a Background Service
+          name: VPN Connection
           background: true
           command: |
             echo "Iniciando servicio VPN en segundo plano..."
-            # Guardar PID para poder terminarlo después
             echo "${VPN_PASSWORD}" | sudo openconnect --protocol=gp --user=${VPN_USER} --passwd-on-stdin vpn.ull.es
-            # Este comando se mantiene ejecutando en segundo plano debido a 'background: true'
       - run:
           name: Wait for VPN to connect
           command: |
-            echo "Esperando a que la conexión VPN se establezca..."
             timeout=0
             while ! ip a show tun0 &>/dev/null && [ $timeout -lt 60 ]; do
                echo "Esperando conexión VPN..."
@@ -33,24 +113,159 @@ jobs:
               exit 1
             fi
             echo "VPN conectada"
-            echo "La IP pública ahora es:"
+            echo "La IP pública ahora es..."
             curl -s http://checkip.amazonaws.com
       - run:
-          name: Run first command with VPN
+          name: Run commands in our infrastructure
           command: |
-            echo "Verificando IP pública con VPN activa:"
+            echo "La IP pública ahora es..."
             curl -s http://checkip.amazonaws.com
-            echo "Este comando ya se ejecuta con la VPN activa"
+            echo "Done"
       - run:
-          name: Run another command with VPN
+          name: Instalar kubectl
           command: |
-            echo "Segunda tarea con VPN activa"
-            curl -s http://checkip.amazonaws.com
-            # Más comandos aquí
+            curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
+            chmod +x kubectl
+            sudo mv kubectl /usr/local/bin/
+      - run:
+          name: Instalar Docker
+          command: |
+            curl -fsSL https://get.docker.com | sudo sh
+      - run:
+          name: Configurar kubeconfig
+          command: |
+            mkdir -p $HOME/.kube
+            echo "$KUBECONFIG_DATA" | base64 -d > $HOME/.kube/config
+            chmod 600 $HOME/.kube/config
+            echo "Verificando acceso al clúster de Kubernetes..."
+            sudo ip address show
+            kubectl get nodes
+      - run:
+          name: Construir imágenes Docker
+          command: |
+            cd client
+            docker build -t $DOCKER_USERNAME/conduit-client:$CIRCLE_SHA1 .
+            cd ../server
+            docker build -t $DOCKER_USERNAME/conduit-server:$CIRCLE_SHA1 .
+            echo $DOCKER_PASSWORD | docker login -u $DOCKER_USERNAME --password-stdin
+            docker push $DOCKER_USERNAME/conduit-client:$CIRCLE_SHA1
+            docker push $DOCKER_USERNAME/conduit-server:$CIRCLE_SHA1
+      - run:
+          name: Desplegar en Kubernetes
+          command: |
+            # Crear archivo de configuración para el despliegue
+            cat > kubernetes-deployment.yaml \<< EOL
+            apiVersion: apps/v1
+            kind: Deployment
+            metadata:
+              name: conduit-server
+            spec:
+              replicas: 2
+              selector:
+                matchLabels:
+                  app: conduit-server
+              template:
+                metadata:
+                  labels:
+                    app: conduit-server
+                spec:
+                  containers:
+                  - name: server
+                    image: $DOCKER_USERNAME/conduit-server:$CIRCLE_SHA1
+                    ports:
+                    - containerPort: 3000
+            ---
+            apiVersion: v1
+            kind: Service
+            metadata:
+              name: conduit-server
+            spec:
+              selector:
+                app: conduit-server
+              ports:
+              - port: 3000
+                targetPort: 3000
+              type: ClusterIP
+            ---
+            apiVersion: apps/v1
+            kind: Deployment
+            metadata:
+              name: conduit-client
+            spec:
+              replicas: 2
+              selector:
+                matchLabels:
+                  app: conduit-client
+              template:
+                metadata:
+                  labels:
+                    app: conduit-client
+                spec:
+                  containers:
+                  - name: client
+                    image: $DOCKER_USERNAME/conduit-client:$CIRCLE_SHA1
+                    ports:
+                    - containerPort: 4100
+                    env:
+                    - name: API_URL
+                      value: http://conduit-server:3000/api
+            ---
+            apiVersion: v1
+            kind: Service
+            metadata:
+              name: conduit-client
+            spec:
+              selector:
+                app: conduit-client
+              ports:
+              - port: 80
+                targetPort: 4100
+              type: LoadBalancer
+            EOL
+
+            kubectl apply -f kubernetes-deployment.yaml
       - run:
           name: Disconnect from VPN
           command: |
-            echo "Desconectando VPN..."
             sudo pkill --signal SIGINT openconnect || true
-            echo "VPN desconectada"
           when: always
+
+workflows:
+  version: 2
+  build-test-deploy:
+    jobs:
+      - cypress/install:
+          executor: latest
+          pre-steps:
+            - run: npm config set unsafe-perm true
+
+      - cypress/run:
+          requires:
+            - cypress/install
+          executor: latest
+          parallel: true
+          parallelism: 2
+          no-workspace: true
+          start: npm run start:coverage
+          wait-on: http://localhost:4100
+          record: true
+          post-steps:
+            - store_artifacts:
+                path: coverage
+            # if this machine had no tests to run
+            # there will be no coverage report
+            - run: npx nyc report --reporter=text || true
+            - save-partial-coverage-report:
+                label: e2e
+
+      - merge-coverage:
+          requires:
+            - cypress/run
+
+      - deploy-to-kubernetes:
+          requires:
+            - merge-coverage
+          filters:
+            branches:
+              only: master
+
